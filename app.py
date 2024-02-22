@@ -1,6 +1,7 @@
 # Import necessary libraries.
 import datetime
 import json
+import logging
 import os
 
 import dotenv
@@ -9,6 +10,19 @@ import streamlit as st
 from openai import AzureOpenAI
 from PyPDF2 import PdfReader
 from streamlit_chat import message
+
+# Configure logging
+log_dir = os.getenv("LOG_DIRECTORY", "./")
+log_file_path = os.path.join(str(log_dir), "app.log")
+
+logging.basicConfig(
+    filename=log_file_path,
+    filemode="a",
+    format="[%(asctime)s] [%(levelname)s] [%(filename)s] [%(lineno)s:%(funcName)5s()] %(message)s",
+    datefmt="%Y-%b-%d %H:%M:%S",
+    level=logging.INFO,  # Set your desired log level here, e.g., logging.DEBUG
+)
+logger = logging.getLogger(__name__)
 
 # region ENV + SDK SETUP
 # Set web page title and icon.
@@ -20,11 +34,6 @@ with st.sidebar.expander("Environment Variables"):
     st.write(ENV)
 
 # Set up the Open AI Client
-
-openai.api_type = "azure"
-openai.api_base = ENV["AZURE_OPENAI_ENDPOINT"]
-openai.api_version = ENV["AZURE_OPENAI_API_VERSION"]
-openai.api_key = ENV["AZURE_OPENAI_KEY"]
 
 client = AzureOpenAI(
     api_key=ENV["AZURE_OPENAI_KEY"],
@@ -76,7 +85,8 @@ if pdf is not None:
     pdf_reader = PdfReader(pdf)
     for page in pdf_reader.pages:
         raw_text += page.extract_text()
-    st.session_state["pdf_added_to_prompt"]
+else:
+    st.session_state["pdf_added_to_prompt"] = False  # Reset the flag
 
 # region SIDEBAR SETUP
 
@@ -95,6 +105,9 @@ if clear_button:
     st.session_state["cost"] = []
     st.session_state["total_cost"] = 0.0
     st.session_state["total_tokens"] = []
+    st.session_state["pdf_added_to_prompt"] = False
+    # clear pdf if it was uploaded
+    pdf = None
     counter_placeholder.write(
         f"Total cost of this conversation: £{st.session_state['total_cost']:.5f}"
     )
@@ -133,8 +146,8 @@ def generate_response(prompt):
         )
         response = completion.choices[0].message.content
     except openai.APIError as e:
-        st.write(response)
         response = f"The API could not handle this content: {str(e)}"
+        st.write(response)
     st.session_state["messages"].append({"role": "assistant", "content": response})
 
     # print(st.session_state['messages'])
@@ -144,7 +157,7 @@ def generate_response(prompt):
     return response, total_tokens, prompt_tokens, completion_tokens
 
 
-st.title("Streamlit ChatGPT Demo")
+st.title("Streamlit Azure OpenAI Demo")
 
 # container for chat history
 response_container = st.container()
@@ -160,13 +173,17 @@ with container:
         output, total_tokens, prompt_tokens, completion_tokens = generate_response(
             user_input
         )
+        logger.info(
+            f"User input: {user_input}, output: {output}, total tokens: {total_tokens}, prompt tokens: {prompt_tokens}, completion tokens: {completion_tokens}"
+        )
+
         st.session_state["past"].append(user_input)
         st.session_state["generated"].append(output)
         st.session_state["model_name"].append(ENV["AZURE_OPENAI_CHATGPT_DEPLOYMENT"])
         st.session_state["total_tokens"].append(total_tokens)
 
         # from https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/#pricing
-        cost = total_tokens * 0.001625 / 1000
+        cost = total_tokens * 0.0015 / 1000
 
         st.session_state["cost"].append(cost)
         st.session_state["total_cost"] += cost
